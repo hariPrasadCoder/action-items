@@ -1,0 +1,20 @@
+# Build artifacts
+.build/
+ActionItems.app/
+ActionItems.dmg
+
+# Xcode
+*.xcworkspace
+*.xcuserstate
+.DS_Store
+
+# Swift PM
+.swiftpm/
+
+# Secrets — never commit these
+Secrets.swift
+secrets.plist
+*.env
+
+# Temp
+create_icon.swift

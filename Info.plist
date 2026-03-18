@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>ActionItems</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.hari.actionitems</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>LSUIElement</key>
+    <true/>
+    <!-- Privacy descriptions shown in system prompts -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>ActionItems records meeting audio to transcribe and extract action items.</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>ActionItems captures your screen to extract action items from Slack, WhatsApp, and other apps.</string>
+    <key>NSCalendarsUsageDescription</key>
+    <string>ActionItems reads your calendar to detect upcoming meetings and prompt you to record them.</string>
+    <!-- Custom URL scheme for Gmail OAuth callback -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.hari.actionitems</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>actionitems</string>
+            </array>
+        </dict>
+    </array>
+    <!-- Allow localhost connections for WhisperKit model downloads -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <false/>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>api.moonshot.cn</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <false/>
+            </dict>
+        </dict>
+    </dict>
+</dict>
+</plist>
