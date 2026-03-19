@@ -1,4 +1,5 @@
 import SwiftUI
+import ServiceManagement
 
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
@@ -10,9 +11,15 @@ struct SettingsView: View {
     @AppStorage("gmail_poll_minutes") var gmailPollMinutes = 5
     @State private var kimiTestResult = ""
     @State private var isTesting = false
+    @State private var launchAtLoginError: String?
+
+    var launchAtLoginEnabled: Bool {
+        SMAppService.mainApp.status == .enabled
+    }
 
     var body: some View {
         TabView {
+            generalTab.tabItem { Label("General", systemImage: "gear") }
             apiTab.tabItem { Label("API", systemImage: "key") }
             meetingTab.tabItem { Label("Meeting", systemImage: "waveform") }
             gmailTab.tabItem { Label("Gmail", systemImage: "envelope") }
@@ -20,7 +27,68 @@ struct SettingsView: View {
             shortcutsTab.tabItem { Label("Shortcuts", systemImage: "keyboard") }
         }
         .padding(20)
-        .frame(width: 520, height: 400)
+        .frame(width: 520, height: 420)
+    }
+
+    // MARK: - General Tab
+
+    private var generalTab: some View {
+        Form {
+            Section("Startup") {
+                Toggle(isOn: Binding(
+                    get: { launchAtLoginEnabled },
+                    set: { enable in
+                        do {
+                            if enable {
+                                try SMAppService.mainApp.register()
+                            } else {
+                                try SMAppService.mainApp.unregister()
+                            }
+                            launchAtLoginError = nil
+                        } catch {
+                            launchAtLoginError = error.localizedDescription
+                        }
+                    }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Launch at Login")
+                        Text("ActionItems starts automatically when you log in and runs in the menu bar")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let err = launchAtLoginError {
+                    Text("Error: \(err)")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+
+                if SMAppService.mainApp.status == .requiresApproval {
+                    HStack {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                        Text("Requires approval in System Settings → General → Login Items")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Open") {
+                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.LoginItems-Settings.extension")!)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+                }
+            }
+
+            Section("About") {
+                LabeledContent("Version") { Text("2.0.0") }
+                LabeledContent("Bundle ID") { Text("com.hari.actionitems").foregroundStyle(.secondary) }
+                HStack {
+                    Link("GitHub", destination: URL(string: "https://github.com/hariPrasadCoder/action-items")!)
+                    Spacer()
+                }
+            }
+        }
     }
 
     // MARK: - API Tab
