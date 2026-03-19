@@ -348,14 +348,18 @@ struct ActionItemRow: View {
     @EnvironmentObject var appState: AppState
     let item: ActionItem
     @State private var isHovered = false
+    @State private var isEditing = false
+    @State private var editTask = ""
+    @State private var editDeadline = ""
 
     var body: some View {
         HStack(spacing: 0) {
             // Source color accent bar
             RoundedRectangle(cornerRadius: 2)
-                .fill(item.source.color)
+                .fill(isEditing ? Color.accentColor : item.source.color)
                 .frame(width: 3)
                 .padding(.vertical, 6)
+                .animation(.easeInOut(duration: 0.15), value: isEditing)
 
             HStack(alignment: .top, spacing: 10) {
                 // Checkbox
@@ -367,57 +371,96 @@ struct ActionItemRow: View {
                 }
                 .buttonStyle(.plain)
 
-                // Content
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(item.task)
-                        .font(.body)
-                        .strikethrough(item.isCompleted, color: .secondary)
-                        .foregroundStyle(item.isCompleted ? .secondary : .primary)
-                        .fixedSize(horizontal: false, vertical: true)
+                // Content — normal view or edit mode
+                if isEditing {
+                    VStack(alignment: .leading, spacing: 6) {
+                        TextField("Task", text: $editTask, axis: .vertical)
+                            .textFieldStyle(.plain)
+                            .font(.body)
+                            .lineLimit(1...4)
+                            .onSubmit { saveEdit() }
 
-                    // Badges row
-                    HStack(spacing: 6) {
-                        // Source badge
-                        Label(item.source.displayName, systemImage: item.source.icon)
-                            .font(.caption)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(item.source.color.opacity(0.12))
-                            .foregroundStyle(item.source.color)
-                            .clipShape(Capsule())
-
-                        // Source detail
-                        if !item.sourceDetail.isEmpty {
-                            Text(item.sourceDetail)
+                        HStack(spacing: 6) {
+                            Image(systemName: "calendar").font(.caption).foregroundStyle(.secondary)
+                            TextField("Deadline (e.g. tomorrow, Friday 3pm)", text: $editDeadline)
+                                .textFieldStyle(.plain)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                                .onSubmit { saveEdit() }
+                        }
+
+                        HStack(spacing: 8) {
+                            Button("Save") { saveEdit() }
+                                .buttonStyle(.borderedProminent)
+                                .controlSize(.mini)
+                            Button("Cancel") { isEditing = false }
+                                .buttonStyle(.bordered)
+                                .controlSize(.mini)
                         }
                     }
+                } else {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(item.task)
+                            .font(.body)
+                            .strikethrough(item.isCompleted, color: .secondary)
+                            .foregroundStyle(item.isCompleted ? .secondary : .primary)
+                            .fixedSize(horizontal: false, vertical: true)
 
-                    // Deadline + timestamp row
-                    HStack(spacing: 6) {
-                        if let displayText = item.deadlineDisplayText {
-                            DeadlineBadge(text: displayText, urgency: item.urgency)
+                        HStack(spacing: 6) {
+                            Label(item.source.displayName, systemImage: item.source.icon)
+                                .font(.caption)
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 3)
+                                .background(item.source.color.opacity(0.12))
+                                .foregroundStyle(item.source.color)
+                                .clipShape(Capsule())
+
+                            if !item.sourceDetail.isEmpty {
+                                Text(item.sourceDetail)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                         }
 
-                        Text(item.createdAt.formatted(date: .omitted, time: .shortened))
-                            .font(.caption2)
-                            .foregroundStyle(.quaternary)
+                        HStack(spacing: 6) {
+                            if let displayText = item.deadlineDisplayText {
+                                DeadlineBadge(text: displayText, urgency: item.urgency)
+                            }
+                            Text(item.createdAt.formatted(date: .omitted, time: .shortened))
+                                .font(.caption2)
+                                .foregroundStyle(.quaternary)
+                        }
                     }
                 }
 
                 Spacer()
 
-                // Delete button (shows on hover)
-                Button { appState.delete(item) } label: {
-                    Image(systemName: "trash")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                // Action buttons (on hover)
+                if !isEditing {
+                    HStack(spacing: 6) {
+                        Button {
+                            editTask = item.task
+                            editDeadline = item.deadline ?? ""
+                            isEditing = true
+                        } label: {
+                            Image(systemName: "pencil")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .opacity(isHovered ? 0.7 : 0)
+
+                        Button { appState.delete(item) } label: {
+                            Image(systemName: "trash")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .opacity(isHovered ? 0.7 : 0)
+                    }
+                    .animation(.easeInOut(duration: 0.15), value: isHovered)
                 }
-                .buttonStyle(.plain)
-                .opacity(isHovered ? 0.7 : 0)
-                .animation(.easeInOut(duration: 0.15), value: isHovered)
             }
             .padding(.leading, 10)
             .padding(.trailing, 12)
@@ -425,16 +468,20 @@ struct ActionItemRow: View {
         }
         .background(
             RoundedRectangle(cornerRadius: 8)
-                .fill(item.urgency == .overdue && !item.isCompleted
-                      ? Color.red.opacity(0.04)
-                      : Color(NSColor.controlBackgroundColor).opacity(0.6))
+                .fill(isEditing
+                      ? Color.accentColor.opacity(0.06)
+                      : item.urgency == .overdue && !item.isCompleted
+                        ? Color.red.opacity(0.04)
+                        : Color(NSColor.controlBackgroundColor).opacity(0.6))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(
-                    item.urgency == .overdue && !item.isCompleted
-                        ? Color.red.opacity(0.2)
-                        : Color.primary.opacity(0.05),
+                    isEditing
+                        ? Color.accentColor.opacity(0.4)
+                        : item.urgency == .overdue && !item.isCompleted
+                            ? Color.red.opacity(0.2)
+                            : Color.primary.opacity(0.05),
                     lineWidth: 1
                 )
         )
@@ -442,6 +489,14 @@ struct ActionItemRow: View {
         .listRowInsets(EdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12))
         .listRowBackground(Color.clear)
         .listRowSeparator(.hidden)
+    }
+
+    private func saveEdit() {
+        let trimmed = editTask.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { isEditing = false; return }
+        let deadline = editDeadline.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.updateItem(item, newTask: trimmed, newDeadline: deadline.isEmpty ? nil : deadline)
+        isEditing = false
     }
 }
 

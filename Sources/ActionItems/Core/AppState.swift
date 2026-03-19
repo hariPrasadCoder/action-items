@@ -201,6 +201,36 @@ class AppState: ObservableObject {
         }
     }
 
+    // MARK: - Gmail Sync from Popover
+
+    func syncGmailFromPopover() async {
+        await showNotification("Syncing Gmail...")
+        await pollGmail()
+        // If no notification was set by pollGmail, confirm completion
+        if notification == "Syncing Gmail..." {
+            await showNotification("Gmail synced — no new action items")
+        }
+    }
+
+    // MARK: - Edit Items
+
+    func updateItem(_ item: ActionItem, newTask: String, newDeadline: String?) {
+        let newDeadlineDate = parseDeadlineDate(newDeadline)
+        do {
+            NotificationManager.shared.cancelDeadlineNotification(for: item)
+            try DatabaseManager.shared.updateTask(item, newTask: newTask, newDeadline: newDeadline, newDeadlineDate: newDeadlineDate)
+            // Reschedule with new deadline
+            if let id = item.id {
+                var updated = item
+                updated.deadlineDate = newDeadlineDate
+                NotificationManager.shared.scheduleDeadlineNotification(for: updated)
+            }
+            loadItems()
+        } catch {
+            lastError = error.localizedDescription
+        }
+    }
+
     // MARK: - Gmail Polling
 
     func startGmailPolling() {
@@ -310,19 +340,48 @@ class AppState: ObservableObject {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
 
+        // Helper: if a parsed date has no explicit time (midnight), default it to 9am
+        func defaultToMorning(_ date: Date) -> Date {
+            let components = cal.dateComponents([.hour, .minute], from: date)
+            // If time is midnight (00:00), treat it as date-only → set to 9am
+            if components.hour == 0 && components.minute == 0 {
+                return cal.date(bySettingHour: 9, minute: 0, second: 0, of: date) ?? date
+            }
+            return date
+        }
+
         // Special keyword parsing
-        if lower.contains("end of day") || lower.contains("eod") || lower.contains("cob") || lower == "today" {
+        if lower.contains("end of day") || lower.contains("eod") || lower.contains("cob") {
             return cal.date(bySettingHour: 17, minute: 0, second: 0, of: Date())
         }
-        if lower == "tomorrow" {
+        if lower == "today" || lower.hasSuffix("today") {
+            return cal.date(bySettingHour: 9, minute: 0, second: 0, of: today)
+        }
+        if lower.contains("tomorrow") {
             let tomorrow = cal.date(byAdding: .day, value: 1, to: today)!
+            // Check if a time was specified alongside "tomorrow"
+            if let detected = detectDate(in: text), !isMidnight(detected, cal: cal) {
+                return detected
+            }
             return cal.date(bySettingHour: 9, minute: 0, second: 0, of: tomorrow)
         }
 
-        // NSDataDetector handles "next Friday", "March 20", "3pm", etc.
+        // NSDataDetector handles "next Friday", "March 20", "3pm", "in 2 hours", etc.
+        if let date = detectDate(in: text) {
+            return defaultToMorning(date)
+        }
+        return nil
+    }
+
+    private func detectDate(in text: String) -> Date? {
         guard let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.date.rawValue) else { return nil }
         let range = NSRange(text.startIndex..., in: text)
         return detector.firstMatch(in: text, options: [], range: range)?.date
+    }
+
+    private func isMidnight(_ date: Date, cal: Calendar) -> Bool {
+        let c = cal.dateComponents([.hour, .minute], from: date)
+        return c.hour == 0 && c.minute == 0
     }
 
     @MainActor

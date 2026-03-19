@@ -85,6 +85,15 @@ class DatabaseManager {
         }
     }
 
+    func updateTask(_ item: ActionItem, newTask: String, newDeadline: String?, newDeadlineDate: Date?) throws {
+        try dbQueue.write { db in
+            try db.execute(
+                sql: "UPDATE action_items SET task = ?, deadline = ?, deadlineDate = ? WHERE id = ?",
+                arguments: [newTask, newDeadline, newDeadlineDate, item.id]
+            )
+        }
+    }
+
     func delete(_ item: ActionItem) throws {
         try dbQueue.write { db in
             _ = try item.delete(db)

@@ -150,6 +150,23 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
+    // Called from the popover — must close popover first, then activate
+    func openDashboardFromPopover() {
+        popover?.performClose(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            self.openDashboard()
+        }
+    }
+
+    func openSettingsFromPopover() {
+        popover?.performClose(nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        }
+    }
+
     // MARK: - NSWindowDelegate
 
     func windowWillClose(_ notification: Notification) {

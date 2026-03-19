@@ -128,15 +128,19 @@ struct MenuBarView: View {
 
             QuickActionButton(
                 icon: appState.gmail.isConnected ? "envelope.badge" : "envelope.badge.fill",
-                label: appState.gmail.isConnected ? "Sync Gmail" : "Connect Gmail",
+                label: appState.gmail.isConnected ? "Sync Gmail Now" : "Connect Gmail",
                 shortcut: nil,
                 tint: .orange,
                 loading: false
             ) {
                 if appState.gmail.isConnected {
-                    Task { await appState.pollGmail() }
+                    Task { await appState.syncGmailFromPopover() }
                 } else {
-                    appState.gmail.startOAuthFlow()
+                    // Close popover before starting OAuth (opens browser)
+                    (NSApp.delegate as? AppDelegate)?.popover?.performClose(nil)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        appState.gmail.startOAuthFlow()
+                    }
                 }
             }
         }
@@ -236,9 +240,7 @@ struct MenuBarView: View {
     private var footer: some View {
         HStack {
             Button("Dashboard") {
-                if let delegate = NSApp.delegate as? AppDelegate {
-                    delegate.openDashboard()
-                }
+                (NSApp.delegate as? AppDelegate)?.openDashboardFromPopover()
             }
             .buttonStyle(.plain)
             .font(.caption)
@@ -247,7 +249,7 @@ struct MenuBarView: View {
             Spacer()
 
             Button("Settings") {
-                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                (NSApp.delegate as? AppDelegate)?.openSettingsFromPopover()
             }
             .buttonStyle(.plain)
             .font(.caption)
