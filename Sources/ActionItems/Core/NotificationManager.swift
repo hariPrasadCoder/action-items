@@ -3,8 +3,9 @@ import UserNotifications
 import AppKit
 
 extension Notification.Name {
-    static let startMeetingRecording = Notification.Name("com.hari.actionitems.startMeetingRecording")
-    static let openDashboard = Notification.Name("com.hari.actionitems.openDashboard")
+    static let openDashboard       = Notification.Name("com.hari.actionitems.openDashboard")
+    static let nudgeResponseDone   = Notification.Name("com.hari.actionitems.nudgeResponseDone")
+    static let nudgeResponseSend   = Notification.Name("com.hari.actionitems.nudgeResponseSend")
 }
 
 class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
@@ -24,27 +25,30 @@ class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func setupCategories() {
-        let recordAction = UNNotificationAction(identifier: "RECORD", title: "Record Meeting", options: [.foreground])
-        let skipAction = UNNotificationAction(identifier: "SKIP", title: "Skip", options: [])
-        let meetingCategory = UNNotificationCategory(
-            identifier: "MEETING_PROMPT",
-            actions: [recordAction, skipAction],
-            intentIdentifiers: [],
-            options: []
-        )
-
+        // Deadline reminder — my own tasks
         let openAction = UNNotificationAction(identifier: "OPEN_DASHBOARD", title: "Open", options: [.foreground])
+        let doneAction = UNNotificationAction(identifier: "MARK_DONE", title: "Done ✓", options: [])
         let deadlineCategory = UNNotificationCategory(
             identifier: "DEADLINE_REMINDER",
-            actions: [openAction],
+            actions: [doneAction, openAction],
             intentIdentifiers: [],
             options: []
         )
 
-        UNUserNotificationCenter.current().setNotificationCategories([meetingCategory, deadlineCategory])
+        // Nudge for delegated task — ask manager if they want to send
+        let sendNudgeAction = UNNotificationAction(identifier: "SEND_NUDGE", title: "Send Nudge", options: [])
+        let skipNudgeAction = UNNotificationAction(identifier: "SKIP_NUDGE", title: "Skip", options: [])
+        let delegateNudgeCategory = UNNotificationCategory(
+            identifier: "DELEGATE_NUDGE",
+            actions: [sendNudgeAction, skipNudgeAction],
+            intentIdentifiers: [],
+            options: []
+        )
+
+        UNUserNotificationCenter.current().setNotificationCategories([deadlineCategory, delegateNudgeCategory])
     }
 
-    // MARK: - Deadline Notifications
+    // MARK: - Deadline Notifications (my tasks)
 
     func scheduleDeadlineNotification(for item: ActionItem) {
         guard let deadlineDate = item.deadlineDate, let itemId = item.id else { return }
@@ -56,6 +60,7 @@ class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         content.body = item.task
         content.sound = .default
         content.categoryIdentifier = "DEADLINE_REMINDER"
+        content.userInfo = ["itemId": itemId]
 
         let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
@@ -68,18 +73,62 @@ class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["deadline_\(id)"])
     }
 
-    // MARK: - Meeting Notifications
+    // MARK: - Self Nudge (my tasks overdue)
+
+    func scheduleNudge(for item: ActionItem) {
+        guard let itemId = item.id else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Flaxie Reminder"
+        content.body = item.task
+        if let deadline = item.deadlineDisplayText {
+            content.subtitle = "Due: \(deadline)"
+        }
+        content.sound = .default
+        content.categoryIdentifier = "DEADLINE_REMINDER"
+        content.userInfo = ["itemId": itemId, "nudge": true]
+
+        // Fire immediately (5 seconds delay to avoid instant popup during app logic)
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5, repeats: false)
+        let request = UNNotificationRequest(identifier: "nudge_\(itemId)_\(Date().timeIntervalSince1970)", content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    func cancelNudge(for item: ActionItem) {
+        guard let id = item.id else { return }
+        // We can't easily cancel nudges by prefix; just remove pending deadline ones
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["nudge_\(id)"])
+    }
+
+    // MARK: - Delegate Nudge (ask manager before nudging teammate)
+
+    func scheduleDelegateNudgePrompt(for item: ActionItem, assigneeName: String) {
+        guard let itemId = item.id else { return }
+
+        let content = UNMutableNotificationContent()
+        content.title = "Flaxie: \(assigneeName) hasn't updated yet"
+        content.body = item.task
+        content.subtitle = "Want me to send them a nudge?"
+        content.sound = .default
+        content.categoryIdentifier = "DELEGATE_NUDGE"
+        content.userInfo = ["itemId": itemId, "assigneeName": assigneeName]
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5, repeats: false)
+        let request = UNNotificationRequest(identifier: "delegate_nudge_\(itemId)_\(Date().timeIntervalSince1970)", content: content, trigger: trigger)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    // MARK: - Meeting Notifications (calendar-based, no recording — just awareness)
 
     func scheduleMeetingPrompt(title: String, startDate: Date, eventId: String) {
-        // Notify 1 minute before (or at start if < 1 minute away)
         let fireDate = max(startDate.addingTimeInterval(-60), Date().addingTimeInterval(3))
         guard fireDate > Date() else { return }
 
         let content = UNMutableNotificationContent()
         content.title = "Meeting Starting Soon"
-        content.body = "\(title) — Record this meeting?"
+        content.body = "\(title) — Flaxie is ready to capture action items"
         content.sound = .default
-        content.categoryIdentifier = "MEETING_PROMPT"
+        content.categoryIdentifier = "DEADLINE_REMINDER"
         content.userInfo = ["meetingTitle": title]
 
         let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: fireDate)
@@ -95,9 +144,18 @@ class NotificationManager: NSObject, UNUserNotificationCenterDelegate {
     // MARK: - UNUserNotificationCenterDelegate
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        let userInfo = response.notification.request.content.userInfo
+        let itemId = userInfo["itemId"] as? Int64
+
         switch response.actionIdentifier {
-        case "RECORD":
-            NotificationCenter.default.post(name: .startMeetingRecording, object: nil)
+        case "MARK_DONE":
+            if let id = itemId {
+                NotificationCenter.default.post(name: .nudgeResponseDone, object: nil, userInfo: ["itemId": id])
+            }
+        case "SEND_NUDGE":
+            if let id = itemId {
+                NotificationCenter.default.post(name: .nudgeResponseSend, object: nil, userInfo: ["itemId": id])
+            }
         case "OPEN_DASHBOARD", UNNotificationDefaultActionIdentifier:
             NotificationCenter.default.post(name: .openDashboard, object: nil)
         default:

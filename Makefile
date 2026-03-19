@@ -1,57 +1,68 @@
-APP_NAME   = ActionItems
-BUNDLE_ID  = com.hari.actionitems
-APP_PATH   = $(shell pwd)/$(APP_NAME).app
-DEBUG_BIN  = $(shell pwd)/.build/debug/$(APP_NAME)
-RELEASE_BIN = $(shell pwd)/.build/release/$(APP_NAME)
-ENTITLEMENTS = $(shell pwd)/$(APP_NAME).entitlements
-INFO_PLIST = $(shell pwd)/Info.plist
-SIGN_IDENTITY = ActionItems Dev
+APP_NAME     = ActionItems# SPM target name (binary name)
+DISPLAY_NAME = Flaxie               # shown in Finder / menu bar
+BUNDLE_ID    = com.hari.actionitems
+APP_PATH     = $(shell pwd)/Flaxie.app
+DEBUG_BIN    = $(shell pwd)/.build/debug/$(APP_NAME)
+RELEASE_BIN  = $(shell pwd)/.build/release/$(APP_NAME)
+ENTITLEMENTS = $(shell pwd)/ActionItems.entitlements
+INFO_PLIST   = $(shell pwd)/Info.plist
+SIGN_IDENTITY = -   # ad-hoc signing; replace with "Apple Development: you@email.com" if you have a cert
 
-.PHONY: build release bundle sign run dmg clean kill rebuild
+.PHONY: build release bundle sign run dmg clean kill rebuild xcode
 
-# ── Development ──────────────────────────────────────────────────────────────
+# ── Development ───────────────────────────────────────────────────────────────
 
-## Build (debug)
+## Build debug binary
 build:
 	swift build
 
+## Open in Xcode (Package.swift as Xcode workspace)
+xcode:
+	xed .
+
 ## Create .app bundle from binary
 bundle:
-	@echo "→ Creating .app bundle..."
+	@echo "→ Creating Flaxie.app bundle..."
 	@mkdir -p "$(APP_PATH)/Contents/MacOS"
 	@mkdir -p "$(APP_PATH)/Contents/Resources"
 	@if [ -f "$(RELEASE_BIN)" ] && [ "$(RELEASE_BIN)" -nt "$(DEBUG_BIN)" ]; then \
+		swift build -c release 2>&1 | tail -2; \
 		cp "$(RELEASE_BIN)" "$(APP_PATH)/Contents/MacOS/$(APP_NAME)"; \
 		echo "→ Using release binary"; \
 	else \
-		swift build 2>&1 | tail -3; \
+		swift build 2>&1 | tail -2; \
 		cp "$(DEBUG_BIN)" "$(APP_PATH)/Contents/MacOS/$(APP_NAME)"; \
 		echo "→ Using debug binary"; \
 	fi
 	@cp "$(INFO_PLIST)" "$(APP_PATH)/Contents/Info.plist"
-	@if [ -f Resources/AppIcon.icns ]; then cp Resources/AppIcon.icns "$(APP_PATH)/Contents/Resources/AppIcon.icns"; fi
-	@echo "→ Bundle ready"
+	@if [ -f Resources/AppIcon.icns ]; then \
+		cp Resources/AppIcon.icns "$(APP_PATH)/Contents/Resources/AppIcon.icns"; \
+	fi
+	@echo "→ Bundle ready at $(APP_PATH)"
 
-## Sign the bundle
+## Sign the bundle (ad-hoc by default)
 sign: bundle
-	@echo "→ Signing..."
+	@echo "→ Signing with: $(SIGN_IDENTITY)"
 	@codesign --force --deep --sign "$(SIGN_IDENTITY)" \
-		--entitlements "$(ENTITLEMENTS)" "$(APP_PATH)"
+		--entitlements "$(ENTITLEMENTS)" \
+		--options runtime \
+		"$(APP_PATH)"
 	@echo "→ Signed OK"
 
-## Kill running instance
+## Kill any running instance
 kill:
 	@pkill -x $(APP_NAME) 2>/dev/null || true
+	@pkill -f "Flaxie.app" 2>/dev/null || true
 
-## Build + sign + launch (dev)
+## Build + sign + launch (quickest dev loop)
 run: kill sign
 	@open "$(APP_PATH)"
-	@echo "→ Running — look for the icon in your menu bar"
+	@echo "→ Flaxie running — look for the sparkles icon in your menu bar"
 
-## Full clean
+## Full rebuild from scratch
 rebuild: clean run
 
-# ── Distribution ─────────────────────────────────────────────────────────────
+# ── Distribution ──────────────────────────────────────────────────────────────
 
 ## Build optimised release binary
 release:
@@ -59,9 +70,9 @@ release:
 	@swift build -c release
 	@echo "→ Release binary ready"
 
-## Create installable DMG (drag-to-Applications)
-DMG_PATH    = $(shell pwd)/ActionItems.dmg
-DMG_STAGING = /tmp/ActionItems_dmg_staging
+## Create installable DMG
+DMG_PATH    = $(shell pwd)/Flaxie.dmg
+DMG_STAGING = /tmp/Flaxie_dmg_staging
 
 dmg: release sign
 	@echo "→ Creating DMG..."
@@ -70,7 +81,7 @@ dmg: release sign
 	@ln -s /Applications "$(DMG_STAGING)/Applications"
 	@rm -f "$(DMG_PATH)"
 	@hdiutil create \
-		-volname "ActionItems" \
+		-volname "Flaxie" \
 		-srcfolder "$(DMG_STAGING)" \
 		-ov -format UDZO \
 		"$(DMG_PATH)" > /dev/null

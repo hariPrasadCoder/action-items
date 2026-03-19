@@ -1,272 +1,493 @@
 import SwiftUI
 import EventKit
 
+// MARK: - War Room
+
 struct DashboardView: View {
     @EnvironmentObject var appState: AppState
-    @State private var selectedSource: ActionItemSource? = nil
+    @State private var selectedView: WarRoomView = .people
+    @State private var selectedPerson: Person?
+    @State private var selectedMeeting: String?
     @State private var showCompleted = false
     @State private var searchText = ""
+    @State private var showPasteNotes = false
+
+    enum WarRoomView { case people, mine, all }
 
     var body: some View {
-        NavigationSplitView {
+        HStack(spacing: 0) {
             sidebar
-        } detail: {
+            Divider().overlay(Color.flaxPurple.opacity(0.07))
             mainContent
         }
-        .navigationTitle("")
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Toggle(isOn: $showCompleted) {
-                    Label(showCompleted ? "Hide Done" : "Show Done",
-                          systemImage: showCompleted ? "eye.slash" : "eye")
-                }
-                .toggleStyle(.button)
-                .help("Toggle completed items")
-
-                Divider()
-
-                Button {
-                    Task { await appState.captureScreenAndExtract() }
-                } label: {
-                    Label("Capture Screen", systemImage: "camera.viewfinder")
-                }
-                .disabled(appState.isExtracting)
-                .help("Capture screen (⌘⇧A)")
-
-                Button {
-                    Task { await appState.toggleMeetingRecording() }
-                } label: {
-                    if appState.isMeetingModelLoading {
-                        Label("Loading...", systemImage: "waveform.circle")
-                    } else {
-                        Label(
-                            appState.isRecordingMeeting ? "Stop Recording" : "Record Meeting",
-                            systemImage: appState.isRecordingMeeting ? "stop.circle.fill" : "waveform.circle"
-                        )
-                    }
-                }
-                .tint(appState.isRecordingMeeting ? .red : .accentColor)
-                .help("Toggle meeting recording (⌘⇧M)")
-            }
+        .background(Color.flaxCream)
+        .frame(minWidth: 900, minHeight: 580)
+        .sheet(isPresented: $showPasteNotes) {
+            PasteNotesView().environmentObject(appState)
         }
     }
 
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        List {
-            // Stats
-            if appState.overdueCount > 0 {
-                HStack(spacing: 6) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
-                        .font(.caption)
-                    Text("\(appState.overdueCount) overdue")
-                        .font(.caption.bold())
-                        .foregroundStyle(.red)
-                }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 5)
-                .background(.red.opacity(0.1))
-                .cornerRadius(6)
-                .listRowBackground(Color.clear)
-                .listRowInsets(EdgeInsets(top: 4, leading: 8, bottom: 0, trailing: 8))
-            }
+        VStack(spacing: 0) {
+            sidebarHeader
 
-            Section("Sources") {
-                SidebarRow(icon: "tray.full", label: "All",
-                           count: filteredItems(nil).count, source: nil, selected: $selectedSource)
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 0) {
 
-                ForEach(ActionItemSource.allCases, id: \.self) { source in
-                    SidebarRow(
-                        icon: source.icon,
-                        label: source.displayName,
-                        count: filteredItems(source).count,
-                        source: source,
-                        selected: $selectedSource,
-                        color: source.color
-                    )
-                }
-            }
+                    if appState.overdueCount > 0 {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.caption2).foregroundStyle(.red)
+                            Text("\(appState.overdueCount) overdue")
+                                .font(.caption2.bold()).foregroundStyle(.red)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 7)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.red.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .padding(.horizontal, 12)
+                        .padding(.top, 8)
+                        .padding(.bottom, 4)
+                    }
 
-            // Upcoming meetings from calendar
-            if appState.calendar.isAuthorized && !appState.calendar.upcomingMeetings.isEmpty {
-                Section("Today's Meetings") {
-                    ForEach(appState.calendar.upcomingMeetings.prefix(5), id: \.eventIdentifier) { event in
-                        UpcomingMeetingRow(event: event, appState: appState)
+                    sidebarSectionLabel("VIEWS")
+
+                    SidebarRow(icon: "person.fill", label: "My Tasks",
+                               count: appState.myItems.filter { showCompleted || $0.status != .done }.count,
+                               isSelected: selectedView == .mine && selectedPerson == nil && selectedMeeting == nil) {
+                        selectedView = .mine; selectedPerson = nil; selectedMeeting = nil
+                    }
+                    SidebarRow(icon: "person.2.fill", label: "Team",
+                               count: appState.delegatedItems.count,
+                               isSelected: selectedView == .people && selectedPerson == nil && selectedMeeting == nil) {
+                        selectedView = .people; selectedPerson = nil; selectedMeeting = nil
+                    }
+                    SidebarRow(icon: "tray.full.fill", label: "All Items",
+                               count: appState.actionItems.filter { showCompleted || $0.status != .done }.count,
+                               isSelected: selectedView == .all && selectedPerson == nil && selectedMeeting == nil) {
+                        selectedView = .all; selectedPerson = nil; selectedMeeting = nil
+                    }
+
+                    if !appState.delegatedByAssignee.isEmpty {
+                        sidebarSectionLabel("PEOPLE")
+                        ForEach(appState.delegatedByAssignee, id: \.0.name) { person, items in
+                            SidebarPersonRow(
+                                person: person,
+                                overdueCount: items.filter { $0.urgency == .overdue }.count,
+                                taskCount: items.count,
+                                isSelected: selectedPerson?.name == person.name
+                            ) {
+                                selectedPerson = person
+                                selectedView = .people
+                                selectedMeeting = nil
+                            }
+                        }
+                    }
+
+                    let meetings = Set(appState.actionItems.compactMap { $0.meetingTitle }).sorted()
+                    if !meetings.isEmpty {
+                        sidebarSectionLabel("MEETINGS")
+                        ForEach(meetings, id: \.self) { title in
+                            let count = appState.actionItems.filter { $0.meetingTitle == title && $0.status != .done }.count
+                            SidebarRow(icon: "calendar.badge.clock", label: title, count: count,
+                                       isSelected: selectedMeeting == title, color: .teal) {
+                                selectedMeeting = title; selectedPerson = nil
+                            }
+                        }
                     }
                 }
+                .padding(.bottom, 16)
+            }
+
+            Divider().overlay(Color.flaxPurple.opacity(0.07))
+            sidebarFooter
+        }
+        .frame(width: 210)
+        .background(Color.flaxCream)
+    }
+
+    private var sidebarHeader: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color.flaxPurple)
+                    .frame(width: 28, height: 28)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Flaxie")
+                    .font(.system(size: 13, weight: .semibold, design: .serif))
+                    .foregroundStyle(Color.flaxInk)
+                Text("War Room")
+                    .font(.caption2)
+                    .foregroundStyle(Color.flaxMuted)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 13)
+    }
+
+    private func sidebarSectionLabel(_ title: String) -> some View {
+        Text(title)
+            .font(.system(size: 9, weight: .bold))
+            .tracking(0.8)
+            .foregroundStyle(Color.flaxMuted.opacity(0.6))
+            .padding(.horizontal, 16)
+            .padding(.top, 14)
+            .padding(.bottom, 4)
+    }
+
+    private var sidebarFooter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if appState.granola.isWatching {
+                integrationDot(label: "Granola", color: .teal)
+            }
+            if appState.fireflies.isConnected {
+                integrationDot(label: "Fireflies", color: .indigo)
+            }
+            if appState.slack.isConnected {
+                integrationDot(label: "Slack", color: Color(red: 0.27, green: 0.20, blue: 0.40))
+            }
+            if appState.gmail.isConnected {
+                integrationDot(label: "Gmail", color: .orange)
             }
         }
-        .listStyle(.sidebar)
-        .frame(minWidth: 200)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private func integrationDot(label: String, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 5, height: 5)
+            Text(label).font(.caption2).foregroundStyle(Color.flaxMuted)
+        }
     }
 
     // MARK: - Main content
 
     private var mainContent: some View {
         VStack(spacing: 0) {
-            // Search bar
-            HStack(spacing: 8) {
-                Image(systemName: "magnifyingglass")
-                    .foregroundStyle(.secondary)
-                    .font(.callout)
-                TextField("Search action items...", text: $searchText)
-                    .textFieldStyle(.plain)
-                if !searchText.isEmpty {
-                    Button { searchText = "" } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 9)
-            .background(.ultraThinMaterial)
-            .cornerRadius(10)
-            .padding(.horizontal, 16)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
+            contentHeader
 
-            Divider()
-
-            // Recording status bar
-            if appState.isRecordingMeeting {
-                MeetingStatusBar()
-                    .environmentObject(appState)
-            }
-
-            // Notification banner
             if let note = appState.notification {
-                HStack(spacing: 8) {
-                    Image(systemName: note.lowercased().hasPrefix("error") ? "exclamationmark.triangle.fill" : "info.circle.fill")
-                        .foregroundStyle(note.lowercased().hasPrefix("error") ? .red : .blue)
-                    Text(note)
-                        .font(.callout)
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 9)
-                .background(note.lowercased().hasPrefix("error") ? .red.opacity(0.08) : .blue.opacity(0.08))
-                .transition(.move(edge: .top).combined(with: .opacity))
+                notificationBar(note).transition(.move(edge: .top).combined(with: .opacity))
             }
 
-            // Items list
+            searchBar
+
+            Divider().overlay(Color.flaxPurple.opacity(0.07))
+
             let items = displayedItems
             if items.isEmpty {
                 emptyState
+            } else if selectedView == .people && selectedPerson == nil && selectedMeeting == nil {
+                peopleGrid(items: items)
             } else {
-                List {
-                    // Overdue section at top if there are overdue items
-                    let overdueItems = items.filter { $0.urgency == .overdue }
-                    if !overdueItems.isEmpty && searchText.isEmpty {
-                        Section {
-                            ForEach(overdueItems) { item in
-                                ActionItemRow(item: item)
-                                    .environmentObject(appState)
-                            }
-                        } header: {
-                            Label("Overdue", systemImage: "exclamationmark.triangle.fill")
-                                .font(.caption.bold())
-                                .foregroundStyle(.red)
-                        }
-                    }
-
-                    // Remaining items grouped by date
-                    let remaining = overdueItems.isEmpty || !searchText.isEmpty
-                        ? items
-                        : items.filter { $0.urgency != .overdue }
-
-                    ForEach(groupedItems(remaining), id: \.0) { date, dayItems in
-                        Section {
-                            ForEach(dayItems) { item in
-                                ActionItemRow(item: item)
-                                    .environmentObject(appState)
-                            }
-                        } header: {
-                            Text(date)
-                                .font(.caption.bold())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .listStyle(.plain)
-                .animation(.default, value: items.count)
+                itemList(items: items)
             }
         }
+        .background(Color.flaxCream)
     }
+
+    private var contentHeader: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(contentTitle)
+                    .font(.system(size: 20, weight: .semibold, design: .serif))
+                    .foregroundStyle(Color.flaxInk)
+                if let sub = contentSubtitle {
+                    Text(sub)
+                        .font(.caption)
+                        .foregroundStyle(Color.flaxMuted)
+                }
+            }
+
+            Spacer()
+
+            // Actions
+            HStack(spacing: 6) {
+                Button {
+                    withAnimation { showCompleted.toggle() }
+                } label: {
+                    Label(showCompleted ? "Hide Done" : "Show Done",
+                          systemImage: showCompleted ? "eye.slash" : "eye")
+                        .font(.caption)
+                        .foregroundStyle(Color.flaxMuted)
+                }
+                .buttonStyle(.plain)
+                .help(showCompleted ? "Hide completed" : "Show completed")
+
+                headerButton(icon: "square.and.pencil", label: "Paste Notes") {
+                    showPasteNotes = true
+                }
+
+                headerButton(
+                    icon: appState.isExtracting ? "progress.indicator" : "camera.viewfinder",
+                    label: "Capture"
+                ) {
+                    Task { await appState.captureScreenAndExtract() }
+                }
+                .disabled(appState.isExtracting)
+
+                HStack(spacing: 5) {
+                    Circle().fill(Color.green).frame(width: 5, height: 5)
+                    Text("Active")
+                        .font(.caption2)
+                        .foregroundStyle(Color.flaxMuted)
+                }
+                .padding(.leading, 4)
+            }
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 16)
+        .background(Color.flaxCream)
+    }
+
+    private func headerButton(icon: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Image(systemName: icon).font(.system(size: 12))
+                Text(label).font(.caption)
+            }
+            .foregroundStyle(Color.flaxMuted)
+            .padding(.horizontal, 9).padding(.vertical, 5)
+            .background(Color.flaxPurple.opacity(0.07))
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func notificationBar(_ note: String) -> some View {
+        let isError = note.lowercased().hasPrefix("error") || note.lowercased().hasPrefix("enable")
+        return HStack(spacing: 8) {
+            Image(systemName: isError ? "exclamationmark.triangle.fill" : "sparkles")
+                .foregroundStyle(isError ? .red : Color.flaxPurple)
+                .font(.callout)
+            Text(note).font(.callout).foregroundStyle(isError ? .red : Color.flaxInk)
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+        .background(isError ? Color.red.opacity(0.06) : Color.flaxPurple.opacity(0.06))
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .foregroundStyle(Color.flaxMuted)
+                .font(.callout)
+            TextField("Search tasks, people, meetings…", text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.callout)
+                .foregroundStyle(Color.flaxInk)
+            if !searchText.isEmpty {
+                Button { searchText = "" } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(Color.flaxMuted)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(Color.flaxPurple.opacity(0.05))
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+    }
+
+    // MARK: - People grid
+
+    private func peopleGrid(items: [ActionItem]) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 16) {
+                ForEach(appState.delegatedByAssignee, id: \.0.name) { person, personItems in
+                    let filtered = filterItems(personItems)
+                    if !filtered.isEmpty {
+                        PersonSection(person: person, items: filtered).environmentObject(appState)
+                    }
+                }
+                let myFiltered = filterItems(appState.myItems)
+                if !myFiltered.isEmpty {
+                    myTasksSection(myFiltered)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+        }
+    }
+
+    private func myTasksSection(_ items: [ActionItem]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                PersonAvatar(name: appState.currentUser.name, size: 26)
+                Text("My Tasks")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Color.flaxInk)
+                Spacer()
+                Text("\(items.count) task\(items.count == 1 ? "" : "s")")
+                    .font(.caption2)
+                    .foregroundStyle(Color.flaxMuted)
+            }
+            .padding(.horizontal, 14)
+
+            ForEach(items) { item in
+                ActionItemRow(item: item).environmentObject(appState)
+            }
+        }
+        .padding(.vertical, 14)
+        .background(Color.white.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.flaxPurple.opacity(0.07), lineWidth: 1))
+    }
+
+    // MARK: - List view
+
+    private func itemList(items: [ActionItem]) -> some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 0) {
+                let overdue = searchText.isEmpty ? items.filter { $0.urgency == .overdue } : []
+                if !overdue.isEmpty {
+                    listSectionHeader("Overdue", icon: "exclamationmark.triangle.fill", color: .red)
+                    ForEach(overdue) { item in
+                        ActionItemRow(item: item).environmentObject(appState)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 3)
+                    }
+                }
+
+                let rest = overdue.isEmpty ? items : items.filter { $0.urgency != .overdue }
+                ForEach(groupedItems(rest), id: \.0) { dateLabel, dayItems in
+                    listSectionHeader(dateLabel, icon: nil, color: Color.flaxMuted)
+                    ForEach(dayItems) { item in
+                        ActionItemRow(item: item).environmentObject(appState)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 3)
+                    }
+                }
+            }
+            .padding(.vertical, 12)
+        }
+    }
+
+    private func listSectionHeader(_ title: String, icon: String?, color: Color) -> some View {
+        HStack(spacing: 5) {
+            if let icon {
+                Image(systemName: icon).font(.caption2.bold()).foregroundStyle(color)
+            }
+            Text(title).font(.caption.bold()).foregroundStyle(color)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .padding(.bottom, 6)
+    }
+
+    // MARK: - Empty state
 
     private var emptyState: some View {
         VStack(spacing: 16) {
-            Image(systemName: selectedSource?.icon ?? "checkmark.circle")
-                .font(.system(size: 52, weight: .thin))
-                .foregroundStyle(.tertiary)
-
+            ZStack {
+                Circle()
+                    .fill(Color.flaxPurple.opacity(0.07))
+                    .frame(width: 64, height: 64)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 26))
+                    .foregroundStyle(Color.flaxPurple.opacity(0.5))
+            }
             VStack(spacing: 6) {
-                Text(emptyStateTitle)
-                    .font(.title3.weight(.medium))
-                    .foregroundStyle(.secondary)
-
-                Text(emptyStateSubtitle)
+                Text(searchText.isEmpty ? "All clear" : "No results for \"\(searchText)\"")
+                    .font(.system(size: 16, weight: .semibold, design: .serif))
+                    .foregroundStyle(Color.flaxInk)
+                Text(searchText.isEmpty
+                     ? "Paste meeting notes or capture your screen to get started"
+                     : "Try a different search term")
                     .font(.callout)
-                    .foregroundStyle(.tertiary)
+                    .foregroundStyle(Color.flaxMuted)
                     .multilineTextAlignment(.center)
             }
-
-            if !searchText.isEmpty {
-                Button("Clear Search") { searchText = "" }
+            if searchText.isEmpty {
+                HStack(spacing: 8) {
+                    Button("Paste Notes") { showPasteNotes = true }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.flaxPurple)
+                    Button("Capture Screen") {
+                        Task { await appState.captureScreenAndExtract() }
+                    }
                     .buttonStyle(.bordered)
+                    .tint(Color.flaxPurple)
+                }
+            } else {
+                Button("Clear Search") { searchText = "" }
+                    .buttonStyle(.bordered).tint(Color.flaxPurple)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(40)
+        .padding(48)
     }
 
-    private var emptyStateTitle: String {
-        if !searchText.isEmpty { return "No results for \"\(searchText)\"" }
-        if showCompleted { return "No items" }
-        return "All clear!"
+    // MARK: - Computed
+
+    private var contentTitle: String {
+        if let p = selectedPerson { return p.name }
+        if let m = selectedMeeting { return m }
+        switch selectedView {
+        case .mine:   return "My Tasks"
+        case .people: return "Team"
+        case .all:    return "All Items"
+        }
     }
 
-    private var emptyStateSubtitle: String {
-        if !searchText.isEmpty { return "Try a different search term" }
-        if showCompleted { return "No action items yet" }
-        return "Press ⌘⇧A to capture from screen\nor ⌘⇧M to record a meeting"
-    }
-
-    // MARK: - Filtering
-
-    private func filteredItems(_ source: ActionItemSource?) -> [ActionItem] {
-        var items = appState.actionItems
-        if let source { items = items.filter { $0.source == source } }
-        if !showCompleted { items = items.filter { !$0.isCompleted } }
-        return items
+    private var contentSubtitle: String? {
+        if selectedMeeting != nil { return "Meeting" }
+        if selectedView == .people && selectedPerson == nil {
+            let n = appState.delegatedItems.count
+            return n > 0 ? "\(n) delegated task\(n == 1 ? "" : "s")" : nil
+        }
+        return nil
     }
 
     private var displayedItems: [ActionItem] {
-        var items = filteredItems(selectedSource)
+        var items: [ActionItem]
+        if let p = selectedPerson {
+            items = appState.actionItems.filter { $0.assignedTo?.name == p.name }
+        } else if let m = selectedMeeting {
+            items = appState.actionItems.filter { $0.meetingTitle == m }
+        } else {
+            switch selectedView {
+            case .mine:   items = appState.myItems
+            case .people: items = appState.actionItems.filter { $0.assignedTo != nil }
+            case .all:    items = appState.actionItems
+            }
+        }
+        if !showCompleted { items = items.filter { $0.status != .done } }
         if !searchText.isEmpty {
             items = items.filter {
                 $0.task.localizedCaseInsensitiveContains(searchText)
                 || $0.sourceDetail.localizedCaseInsensitiveContains(searchText)
+                || ($0.assignedTo?.name.localizedCaseInsensitiveContains(searchText) ?? false)
             }
         }
         return items
     }
 
-    private func groupedItems(_ items: [ActionItem]) -> [(String, [ActionItem])] {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-
-        let grouped = Dictionary(grouping: items) { item in
-            formatter.string(from: item.createdAt)
+    private func filterItems(_ items: [ActionItem]) -> [ActionItem] {
+        var result = showCompleted ? items : items.filter { $0.status != .done }
+        if !searchText.isEmpty {
+            result = result.filter { $0.task.localizedCaseInsensitiveContains(searchText) }
         }
+        return result
+    }
 
-        return grouped.sorted { a, b in
-            let dateA = a.value.first?.createdAt ?? Date.distantPast
-            let dateB = b.value.first?.createdAt ?? Date.distantPast
-            return dateA > dateB
+    private func groupedItems(_ items: [ActionItem]) -> [(String, [ActionItem])] {
+        let fmt = DateFormatter(); fmt.dateStyle = .medium
+        let grouped = Dictionary(grouping: items) { fmt.string(from: $0.createdAt) }
+        return grouped.sorted {
+            ($0.value.first?.createdAt ?? .distantPast) > ($1.value.first?.createdAt ?? .distantPast)
         }
     }
 }
@@ -277,68 +498,132 @@ struct SidebarRow: View {
     let icon: String
     let label: String
     let count: Int
-    let source: ActionItemSource?
-    @Binding var selected: ActionItemSource?
-    var color: Color = .secondary
-
-    var isSelected: Bool { selected == source }
+    let isSelected: Bool
+    var color: Color = Color.flaxPurple
+    let action: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: icon)
-                .foregroundStyle(isSelected ? color : .secondary)
-                .frame(width: 18)
-            Text(label)
-                .font(.callout)
-            Spacer()
-            if count > 0 {
-                Text("\(count)")
-                    .font(.caption2.bold())
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(isSelected ? color.opacity(0.2) : Color.secondary.opacity(0.15))
-                    .foregroundStyle(isSelected ? color : .secondary)
-                    .clipShape(Capsule())
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: icon)
+                    .foregroundStyle(isSelected ? color : Color.flaxMuted)
+                    .font(.system(size: 12))
+                    .frame(width: 16)
+                Text(label)
+                    .font(.callout)
+                    .foregroundStyle(isSelected ? Color.flaxInk : Color.flaxMuted)
+                Spacer()
+                if count > 0 {
+                    Text("\(count)")
+                        .font(.caption2.bold())
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(isSelected ? color.opacity(0.15) : Color.secondary.opacity(0.09))
+                        .foregroundStyle(isSelected ? color : Color.flaxMuted)
+                        .clipShape(Capsule())
+                }
             }
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(isSelected ? color.opacity(0.09) : isHovered ? Color.flaxPurple.opacity(0.04) : Color.clear)
+            )
+            .padding(.horizontal, 8)
         }
-        .contentShape(Rectangle())
-        .onTapGesture { selected = source }
-        .listRowBackground(
-            isSelected
-                ? color.opacity(0.1).cornerRadius(6)
-                : Color.clear.cornerRadius(6)
-        )
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.1), value: isHovered)
     }
 }
 
-// MARK: - Upcoming Meeting Row
+// MARK: - Sidebar Person Row
 
-struct UpcomingMeetingRow: View {
-    let event: EKEvent
-    let appState: AppState
+struct SidebarPersonRow: View {
+    let person: Person
+    let overdueCount: Int
+    let taskCount: Int
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var isHovered = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(event.title ?? "Meeting")
-                    .font(.caption.weight(.medium))
-                    .lineLimit(1)
-                Text(event.startDate.formatted(date: .omitted, time: .shortened))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button {
-                Task { await appState.toggleMeetingRecording() }
-            } label: {
-                Image(systemName: appState.isRecordingMeeting ? "stop.circle.fill" : "record.circle")
-                    .foregroundStyle(appState.isRecordingMeeting ? .red : .blue)
+        Button(action: action) {
+            HStack(spacing: 9) {
+                PersonAvatar(name: person.name, size: 20, isAlert: overdueCount > 0)
+                Text(person.name)
                     .font(.callout)
+                    .foregroundStyle(isSelected ? Color.flaxInk : Color.flaxMuted)
+                    .lineLimit(1)
+                Spacer()
+                if overdueCount > 0 {
+                    Text("\(overdueCount)!")
+                        .font(.caption2.bold()).foregroundStyle(.red)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Color.red.opacity(0.12)).clipShape(Capsule())
+                } else if taskCount > 0 {
+                    Text("\(taskCount)")
+                        .font(.caption2).foregroundStyle(Color.flaxMuted)
+                        .padding(.horizontal, 5).padding(.vertical, 1)
+                        .background(Color.secondary.opacity(0.09)).clipShape(Capsule())
+                }
             }
-            .buttonStyle(.plain)
-            .help(appState.isRecordingMeeting ? "Stop recording" : "Record this meeting")
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 7)
+                    .fill(isSelected ? Color.flaxPurple.opacity(0.09) : isHovered ? Color.flaxPurple.opacity(0.04) : Color.clear)
+            )
+            .padding(.horizontal, 8)
         }
-        .padding(.vertical, 2)
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.1), value: isHovered)
+    }
+}
+
+// MARK: - Person Section (team view)
+
+struct PersonSection: View {
+    @EnvironmentObject var appState: AppState
+    let person: Person
+    let items: [ActionItem]
+
+    var overdueCount: Int { items.filter { $0.urgency == .overdue }.count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                PersonAvatar(name: person.name, size: 30, isAlert: overdueCount > 0)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(person.name)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(Color.flaxInk)
+                    if let email = person.email {
+                        Text(email).font(.caption2).foregroundStyle(Color.flaxMuted)
+                    }
+                }
+                Spacer()
+                if overdueCount > 0 {
+                    Label("\(overdueCount) overdue", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption2.bold()).foregroundStyle(.red)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Color.red.opacity(0.09)).clipShape(Capsule())
+                } else {
+                    Text("\(items.count) task\(items.count == 1 ? "" : "s")")
+                        .font(.caption2).foregroundStyle(Color.flaxMuted)
+                }
+            }
+            .padding(.horizontal, 14)
+
+            VStack(spacing: 6) {
+                ForEach(items) { item in
+                    ActionItemRow(item: item).environmentObject(appState)
+                }
+            }
+        }
+        .padding(.vertical, 14)
+        .background(Color.white.opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.flaxPurple.opacity(0.07), lineWidth: 1))
     }
 }
 
@@ -351,152 +636,231 @@ struct ActionItemRow: View {
     @State private var isEditing = false
     @State private var editTask = ""
     @State private var editDeadline = ""
+    @State private var showDraft = false
 
     var body: some View {
         HStack(spacing: 0) {
-            // Source color accent bar
             RoundedRectangle(cornerRadius: 2)
-                .fill(isEditing ? Color.accentColor : item.source.color)
+                .fill(isEditing ? Color.flaxPurple : item.source.color)
                 .frame(width: 3)
-                .padding(.vertical, 6)
-                .animation(.easeInOut(duration: 0.15), value: isEditing)
+                .padding(.vertical, 8)
 
-            HStack(alignment: .top, spacing: 10) {
-                // Checkbox
-                Button { appState.toggle(item) } label: {
-                    Image(systemName: item.isCompleted ? "checkmark.circle.fill" : "circle")
-                        .font(.system(size: 18))
-                        .foregroundStyle(item.isCompleted ? .green : Color.secondary.opacity(0.7))
-                        .animation(.easeInOut(duration: 0.15), value: item.isCompleted)
+            HStack(alignment: .top, spacing: 11) {
+                Menu {
+                    ForEach(ItemStatus.allCases, id: \.self) { s in
+                        Button { appState.updateStatus(item, status: s) } label: {
+                            Label(s.displayName, systemImage: s.icon)
+                        }
+                    }
+                } label: {
+                    Image(systemName: item.status.icon)
+                        .font(.system(size: 16))
+                        .foregroundStyle(item.status.color)
                 }
-                .buttonStyle(.plain)
+                .menuStyle(.borderlessButton)
+                .frame(width: 22)
+                .padding(.top, 1)
 
-                // Content — normal view or edit mode
-                if isEditing {
-                    VStack(alignment: .leading, spacing: 6) {
-                        TextField("Task", text: $editTask, axis: .vertical)
-                            .textFieldStyle(.plain)
-                            .font(.body)
-                            .lineLimit(1...4)
-                            .onSubmit { saveEdit() }
+                if isEditing { editingView } else { displayView }
 
-                        HStack(spacing: 6) {
-                            Image(systemName: "calendar").font(.caption).foregroundStyle(.secondary)
-                            TextField("Deadline (e.g. tomorrow, Friday 3pm)", text: $editDeadline)
-                                .textFieldStyle(.plain)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .onSubmit { saveEdit() }
-                        }
+                Spacer(minLength: 0)
 
-                        HStack(spacing: 8) {
-                            Button("Save") { saveEdit() }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.mini)
-                            Button("Cancel") { isEditing = false }
-                                .buttonStyle(.bordered)
-                                .controlSize(.mini)
-                        }
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(item.task)
-                            .font(.body)
-                            .strikethrough(item.isCompleted, color: .secondary)
-                            .foregroundStyle(item.isCompleted ? .secondary : .primary)
-                            .fixedSize(horizontal: false, vertical: true)
+                if isHovered && !isEditing { hoverActions }
+            }
+            .padding(.leading, 11)
+            .padding(.trailing, 13)
+            .padding(.vertical, 9)
+        }
+        .background(rowBackground)
+        .overlay(rowBorder)
+        .clipShape(RoundedRectangle(cornerRadius: 9))
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.12), value: isHovered)
+        .sheet(isPresented: $showDraft) {
+            if let draft = item.aiDraft {
+                AIDraftView(draft: draft, item: item).environmentObject(appState)
+            }
+        }
+    }
 
-                        HStack(spacing: 6) {
-                            Label(item.source.displayName, systemImage: item.source.icon)
-                                .font(.caption)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(item.source.color.opacity(0.12))
-                                .foregroundStyle(item.source.color)
-                                .clipShape(Capsule())
+    private var displayView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if let to = item.assignedTo {
+                AssigneeChip(name: to.name, isCurrentUser: to.isCurrentUser)
+            }
+            Text(item.task)
+                .font(.body)
+                .strikethrough(item.status == .done, color: .secondary)
+                .foregroundStyle(item.status == .done ? Color.flaxMuted.opacity(0.7) : Color.flaxInk)
+                .fixedSize(horizontal: false, vertical: true)
 
-                            if !item.sourceDetail.isEmpty {
-                                Text(item.sourceDetail)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                        }
+            HStack(spacing: 6) {
+                Label(item.source.displayName, systemImage: item.source.icon)
+                    .font(.caption2)
+                    .padding(.horizontal, 6).padding(.vertical, 2)
+                    .background(item.source.color.opacity(0.09))
+                    .foregroundStyle(item.source.color)
+                    .clipShape(Capsule())
 
-                        HStack(spacing: 6) {
-                            if let displayText = item.deadlineDisplayText {
-                                DeadlineBadge(text: displayText, urgency: item.urgency)
-                            }
-                            Text(item.createdAt.formatted(date: .omitted, time: .shortened))
-                                .font(.caption2)
-                                .foregroundStyle(.quaternary)
-                        }
-                    }
-                }
-
-                Spacer()
-
-                // Action buttons (on hover)
-                if !isEditing {
-                    HStack(spacing: 6) {
-                        Button {
-                            editTask = item.task
-                            editDeadline = item.deadline ?? ""
-                            isEditing = true
-                        } label: {
-                            Image(systemName: "pencil")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .opacity(isHovered ? 0.7 : 0)
-
-                        Button { appState.delete(item) } label: {
-                            Image(systemName: "trash")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.plain)
-                        .opacity(isHovered ? 0.7 : 0)
-                    }
-                    .animation(.easeInOut(duration: 0.15), value: isHovered)
+                if let title = item.meetingTitle {
+                    Text(title).font(.caption2).foregroundStyle(Color.flaxMuted).lineLimit(1)
+                } else if !item.sourceDetail.isEmpty {
+                    Text(item.sourceDetail).font(.caption2).foregroundStyle(Color.flaxMuted).lineLimit(1)
                 }
             }
-            .padding(.leading, 10)
-            .padding(.trailing, 12)
-            .padding(.vertical, 8)
+
+            HStack(spacing: 6) {
+                if let text = item.deadlineDisplayText {
+                    DeadlineBadge(text: text, urgency: item.urgency)
+                }
+                StatusBadge(status: item.status)
+                Spacer()
+                Text(item.createdAt.formatted(date: .omitted, time: .shortened))
+                    .font(.caption2).foregroundStyle(Color.flaxMuted)
+            }
+
+            if item.aiDraft != nil {
+                Button { showDraft = true } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "sparkles").font(.caption2)
+                        Text("View Flaxie Draft").font(.caption2.weight(.medium))
+                    }
+                    .foregroundStyle(Color.flaxPurple)
+                }
+                .buttonStyle(.plain)
+            }
         }
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isEditing
-                      ? Color.accentColor.opacity(0.06)
-                      : item.urgency == .overdue && !item.isCompleted
-                        ? Color.red.opacity(0.04)
-                        : Color(NSColor.controlBackgroundColor).opacity(0.6))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(
-                    isEditing
-                        ? Color.accentColor.opacity(0.4)
-                        : item.urgency == .overdue && !item.isCompleted
-                            ? Color.red.opacity(0.2)
-                            : Color.primary.opacity(0.05),
-                    lineWidth: 1
-                )
-        )
-        .onHover { isHovered = $0 }
-        .listRowInsets(EdgeInsets(top: 3, leading: 12, bottom: 3, trailing: 12))
-        .listRowBackground(Color.clear)
-        .listRowSeparator(.hidden)
+    }
+
+    private var editingView: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            TextField("Task", text: $editTask, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.body)
+                .foregroundStyle(Color.flaxInk)
+                .lineLimit(1...4)
+                .onSubmit { saveEdit() }
+
+            HStack(spacing: 6) {
+                Image(systemName: "calendar").font(.caption).foregroundStyle(Color.flaxMuted)
+                TextField("Deadline (e.g. tomorrow, Friday 3pm)", text: $editDeadline)
+                    .textFieldStyle(.plain)
+                    .font(.caption)
+                    .foregroundStyle(Color.flaxMuted)
+                    .onSubmit { saveEdit() }
+            }
+
+            HStack(spacing: 8) {
+                Button("Save") { saveEdit() }
+                    .buttonStyle(.borderedProminent).controlSize(.mini).tint(Color.flaxPurple)
+                Button("Cancel") { isEditing = false }
+                    .buttonStyle(.bordered).controlSize(.mini)
+            }
+        }
+    }
+
+    private var hoverActions: some View {
+        HStack(spacing: 5) {
+            if item.aiDraft == nil {
+                IconButton(icon: "sparkles", tint: Color.flaxPurple) {
+                    Task { await appState.draftWithFlaxie(item: item, type: .email) }
+                }
+                .help("Draft with Flaxie")
+            }
+            IconButton(icon: "pencil", tint: Color.flaxMuted) {
+                editTask = item.task; editDeadline = item.deadline ?? ""; isEditing = true
+            }
+            .help("Edit")
+            IconButton(icon: "trash", tint: Color.flaxMuted) { appState.delete(item) }
+                .help("Delete")
+        }
+    }
+
+    private var rowBackground: some View {
+        RoundedRectangle(cornerRadius: 9)
+            .fill(isEditing
+                  ? Color.flaxPurple.opacity(0.04)
+                  : item.urgency == .overdue && item.status != .done
+                    ? Color.red.opacity(0.03)
+                    : Color.white.opacity(isHovered ? 0.85 : 0.55))
+    }
+
+    private var rowBorder: some View {
+        RoundedRectangle(cornerRadius: 9)
+            .stroke(
+                isEditing ? Color.flaxPurple.opacity(0.3)
+                : item.urgency == .overdue && item.status != .done ? Color.red.opacity(0.15)
+                : Color.flaxPurple.opacity(isHovered ? 0.12 : 0.06),
+                lineWidth: 1
+            )
     }
 
     private func saveEdit() {
-        let trimmed = editTask.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { isEditing = false; return }
-        let deadline = editDeadline.trimmingCharacters(in: .whitespacesAndNewlines)
-        appState.updateItem(item, newTask: trimmed, newDeadline: deadline.isEmpty ? nil : deadline)
+        let t = editTask.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !t.isEmpty else { isEditing = false; return }
+        let d = editDeadline.trimmingCharacters(in: .whitespacesAndNewlines)
+        appState.updateItem(item, newTask: t, newDeadline: d.isEmpty ? nil : d)
         isEditing = false
+    }
+}
+
+// MARK: - Assignee Chip
+
+struct AssigneeChip: View {
+    let name: String
+    let isCurrentUser: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            PersonAvatar(name: name, size: 14)
+            Text(isCurrentUser ? "You" : name)
+                .font(.caption2.weight(.semibold))
+        }
+        .padding(.horizontal, 7).padding(.vertical, 3)
+        .background((isCurrentUser ? Color.flaxPurple : Color.secondary).opacity(0.09))
+        .foregroundStyle(isCurrentUser ? Color.flaxPurple : Color.flaxMuted)
+        .clipShape(Capsule())
+    }
+}
+
+// MARK: - Icon Button
+
+struct IconButton: View {
+    let icon: String
+    let tint: Color
+    let action: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: icon)
+                .font(.system(size: 12))
+                .foregroundStyle(isHovered ? tint : tint.opacity(0.45))
+                .frame(width: 24, height: 24)
+                .background(isHovered ? tint.opacity(0.09) : Color.clear)
+                .clipShape(RoundedRectangle(cornerRadius: 5))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.1), value: isHovered)
+    }
+}
+
+// MARK: - Status Badge
+
+struct StatusBadge: View {
+    let status: ItemStatus
+    var body: some View {
+        if status != .todo {
+            HStack(spacing: 3) {
+                Image(systemName: status.icon).font(.caption2)
+                Text(status.displayName).font(.caption2.weight(.semibold))
+            }
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(status.color.opacity(0.11))
+            .foregroundStyle(status.color)
+            .clipShape(Capsule())
+        }
     }
 }
 
@@ -508,70 +872,83 @@ struct DeadlineBadge: View {
 
     var body: some View {
         if urgency == .none {
-            Text(text)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            Text(text).font(.caption2).foregroundStyle(Color.flaxMuted)
         } else {
             HStack(spacing: 3) {
                 if !urgency.icon.isEmpty {
-                    Image(systemName: urgency.icon)
-                        .font(.caption2)
+                    Image(systemName: urgency.icon).font(.caption2)
                 }
-                Text(text)
-                    .font(.caption2.weight(.medium))
+                Text(text).font(.caption2.weight(.semibold))
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(urgency == .overdue ? urgency.color : urgency.color.opacity(0.12))
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(urgency == .overdue ? urgency.color : urgency.color.opacity(0.11))
             .foregroundStyle(urgency == .overdue ? .white : urgency.color)
             .clipShape(Capsule())
         }
     }
 }
 
-// MARK: - Meeting Status Bar
+// MARK: - AI Draft View
 
-struct MeetingStatusBar: View {
+struct AIDraftView: View {
     @EnvironmentObject var appState: AppState
-    @State private var pulse = false
+    @Environment(\.dismiss) var dismiss
+    let draft: String
+    let item: ActionItem
+    @State private var editedDraft: String
+
+    init(draft: String, item: ActionItem) {
+        self.draft = draft
+        self.item = item
+        _editedDraft = State(initialValue: draft)
+    }
 
     var body: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(.red)
-                    .frame(width: 8, height: 8)
-                    .scaleEffect(pulse ? 1.3 : 1.0)
-                    .animation(.easeInOut(duration: 0.8).repeatForever(), value: pulse)
-                    .onAppear { pulse = true }
-
-                Text("Recording")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.red)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.flaxPurple)
+                        .frame(width: 32, height: 32)
+                    Image(systemName: "sparkles")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Flaxie Draft").font(.headline).foregroundStyle(Color.flaxInk)
+                    Text(item.task).font(.caption).foregroundStyle(Color.flaxMuted).lineLimit(1)
+                }
+                Spacer()
+                Button("Done") { dismiss() }
+                    .buttonStyle(.borderedProminent).tint(Color.flaxPurple)
             }
+            .padding(18)
 
-            if !appState.liveTranscript.isEmpty {
-                Text(appState.liveTranscript.suffix(120).description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .frame(maxWidth: 500, alignment: .leading)
+            Divider().overlay(Color.flaxPurple.opacity(0.09))
+
+            TextEditor(text: $editedDraft)
+                .font(.body)
+                .foregroundStyle(Color.flaxInk)
+                .scrollContentBackground(.hidden)
+                .background(Color.flaxCream)
+                .padding(14)
+                .frame(minHeight: 200)
+
+            Divider().overlay(Color.flaxPurple.opacity(0.09))
+
+            HStack(spacing: 10) {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(editedDraft, forType: .string)
+                } label: {
+                    Label("Copy to clipboard", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(.bordered).tint(Color.flaxPurple)
+                Spacer()
             }
-
-            Spacer()
-
-            Button("Stop Recording") {
-                Task { await appState.toggleMeetingRecording() }
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .controlSize(.small)
+            .padding(14)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(.red.opacity(0.07))
-        .overlay(alignment: .bottom) {
-            Divider()
-        }
+        .frame(width: 520)
+        .background(Color.flaxCream)
     }
 }

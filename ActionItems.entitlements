@@ -2,15 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Network for Claude API + Gmail -->
+    <!-- Network for Claude API, Gmail, Slack, Supabase, Fireflies -->
     <key>com.apple.security.network.client</key>
     <true/>
-    <!-- Microphone for meeting recording -->
-    <key>com.apple.security.device.audio-input</key>
-    <true/>
-    <!-- Screen capture for screenshots + system audio -->
+    <!-- Screen capture for screenshots -->
     <key>com.apple.security.screen-recording</key>
     <true/>
-    <!-- No sandbox — required for ad-hoc signed local apps to use ScreenCaptureKit -->
+    <!-- No sandbox — required for FSEvents watching of Granola/Otter directories -->
+    <!-- Note: If submitting to Mac App Store, sandbox must be enabled with security-scoped bookmarks -->
 </dict>
 </plist>

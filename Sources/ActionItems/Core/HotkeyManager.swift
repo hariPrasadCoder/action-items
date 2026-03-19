@@ -9,15 +9,13 @@ class HotkeyManager {
     private var hotkeys: [UInt32: () -> Void] = [:]
     private var hotkeyRefs: [EventHotKeyRef] = []
     private var eventHandlerRef: EventHandlerRef?
-    private var nextID: UInt32 = 1
 
-    // Default key codes (user can change in Settings)
-    // ⌘⇧A = capture screen, ⌘⇧M = toggle meeting
+    // ⌘⇧A = capture screen, ⌘⇧N = paste notes
     static let captureScreenID: UInt32 = 1
-    static let toggleMeetingID: UInt32 = 2
+    static let pasteNotesID: UInt32 = 2
 
     var onCaptureScreen: (() -> Void)?
-    var onToggleMeeting: (() -> Void)?
+    var onPasteNotes: (() -> Void)?
 
     private init() {
         installEventHandler()
@@ -38,28 +36,24 @@ class HotkeyManager {
 
     private func registerDefaults() {
         // ⌘⇧A — capture screen
-        register(
-            id: HotkeyManager.captureScreenID,
-            keyCode: UInt32(kVK_ANSI_A),
-            modifiers: UInt32(cmdKey | shiftKey)
-        ) { [weak self] in
+        register(id: HotkeyManager.captureScreenID,
+                 keyCode: UInt32(kVK_ANSI_A),
+                 modifiers: UInt32(cmdKey | shiftKey)) { [weak self] in
             self?.onCaptureScreen?()
         }
 
-        // ⌘⇧M — toggle meeting
-        register(
-            id: HotkeyManager.toggleMeetingID,
-            keyCode: UInt32(kVK_ANSI_M),
-            modifiers: UInt32(cmdKey | shiftKey)
-        ) { [weak self] in
-            self?.onToggleMeeting?()
+        // ⌘⇧N — paste notes (replaces old meeting recording shortcut)
+        register(id: HotkeyManager.pasteNotesID,
+                 keyCode: UInt32(kVK_ANSI_N),
+                 modifiers: UInt32(cmdKey | shiftKey)) { [weak self] in
+            self?.onPasteNotes?()
         }
     }
 
     // MARK: - Register / Unregister
 
     func register(id: UInt32, keyCode: UInt32, modifiers: UInt32, handler: @escaping () -> Void) {
-        let hotkeyID = EventHotKeyID(signature: OSType(0x4149544D), id: id) // 'AITM'
+        let hotkeyID = EventHotKeyID(signature: OSType(0x464C5858), id: id) // 'FLXX'
         var ref: EventHotKeyRef?
         let status = RegisterEventHotKey(keyCode, modifiers, hotkeyID, GetApplicationEventTarget(), 0, &ref)
         if status == noErr, let ref {

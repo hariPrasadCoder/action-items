@@ -1,5 +1,4 @@
 import SwiftUI
-import AVFoundation
 import Combine
 
 @main
@@ -18,15 +17,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     var statusItem: NSStatusItem?
     var popover: NSPopover?
     var dashboardWindow: NSWindow?
+    var onboardingWindow: NSWindow?
     let appState = AppState()
 
     private var cancellables = Set<AnyCancellable>()
 
+    @AppStorage("onboarding_complete") var onboardingComplete = false
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
-        // Set defaults on first launch
-        // API keys are configured via Settings — do not hardcode secrets here
+        // Set first-launch defaults
         let defaults = UserDefaults.standard
         if defaults.string(forKey: "kimi_api_key") == nil {
             defaults.set("", forKey: "kimi_api_key")
@@ -38,11 +39,18 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         setupNotificationObservers()
         appState.startGmailPolling()
 
-        // Request all permissions
+        // Request permissions
         ScreenCaptureEngine.requestPermission()
-        AVCaptureDevice.requestAccess(for: .audio) { _ in }
         NotificationManager.shared.requestAuthorization()
         Task { await CalendarService.shared.requestAccess() }
+
+        // Wake notification for Supabase reconnect
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil
+        )
 
         // Update badge count when items change
         appState.$actionItems
@@ -50,33 +58,63 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .sink { [weak self] _ in self?.updateMenuBarBadge() }
             .store(in: &cancellables)
 
-        openDashboard()
+        // Show onboarding or go straight to War Room
+        if onboardingComplete {
+            openDashboard()
+        } else {
+            openOnboarding()
+        }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.scheme == "actionitems" && url.host == "gmail-callback" {
-            appState.gmail.handleCallback(url: url)
+        for url in urls where url.scheme == "actionitems" {
+            switch url.host {
+            case "gmail-connected":
+                appState.gmail.handleConnectedCallback()
+            case "slack-connected":
+                Task {
+                    guard let token = try? await FlaxieAPIClient.shared.fetchSlackToken() else { return }
+                    try? await appState.slack.connect(token: token)
+                }
+            default:
+                break
+            }
         }
+    }
+
+    @objc private func handleWake() {
+        appState.supabase.reconnect()
     }
 
     // MARK: - Notification Observers
 
     private func setupNotificationObservers() {
         NotificationCenter.default.addObserver(
-            forName: .startMeetingRecording,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            guard let self else { return }
-            Task { await self.appState.toggleMeetingRecording() }
-        }
-
-        NotificationCenter.default.addObserver(
             forName: .openDashboard,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             self?.openDashboard()
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .nudgeResponseDone,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            if let itemId = notification.userInfo?["itemId"] as? Int64 {
+                self?.appState.updateStatus(itemId: itemId, status: .done)
+            }
+        }
+
+        NotificationCenter.default.addObserver(
+            forName: .nudgeResponseSend,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            if let itemId = notification.userInfo?["itemId"] as? Int64 {
+                self?.appState.nudgeEngine.sendSlackNudge(for: itemId)
+            }
         }
     }
 
@@ -86,14 +124,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "checkmark.circle", accessibilityDescription: "Action Items")
+            button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "Flaxie")
             button.imagePosition = .imageLeft
             button.action = #selector(togglePopover)
             button.target = self
         }
 
         let popover = NSPopover()
-        popover.contentSize = NSSize(width: 380, height: 540)
+        popover.contentSize = NSSize(width: 380, height: 560)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(
             rootView: MenuBarView()
@@ -126,15 +164,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    // MARK: - War Room
+
     func openDashboard() {
         if dashboardWindow == nil {
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 980, height: 660),
+                contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
                 styleMask: [.titled, .closable, .miniaturizable, .resizable],
                 backing: .buffered,
                 defer: false
             )
-            window.title = "Action Items"
+            window.title = "War Room · Flaxie"
             window.center()
             window.contentViewController = NSHostingController(
                 rootView: DashboardView()
@@ -142,7 +182,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             )
             window.isReleasedWhenClosed = false
             window.delegate = self
-            window.minSize = NSSize(width: 700, height: 500)
+            window.minSize = NSSize(width: 800, height: 550)
             dashboardWindow = window
         }
         NSApp.setActivationPolicy(.regular)
@@ -150,7 +190,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    // Called from the popover — must close popover first, then activate
     func openDashboardFromPopover() {
         popover?.performClose(nil)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
@@ -167,11 +206,41 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
+    // MARK: - Onboarding
+
+    func openOnboarding() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 480, height: 560),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Welcome to Flaxie"
+        window.center()
+        window.contentViewController = NSHostingController(
+            rootView: OnboardingView()
+                .environmentObject(appState)
+        )
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        onboardingWindow = window
+
+        NSApp.setActivationPolicy(.regular)
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     // MARK: - NSWindowDelegate
 
     func windowWillClose(_ notification: Notification) {
         if (notification.object as? NSWindow) === dashboardWindow {
             NSApp.setActivationPolicy(.accessory)
+        }
+        if (notification.object as? NSWindow) === onboardingWindow {
+            // If onboarding closed without completing, open War Room anyway
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                self?.openDashboard()
+            }
         }
     }
 
@@ -184,9 +253,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
 
-        HotkeyManager.shared.onToggleMeeting = { [weak self] in
-            Task { @MainActor [weak self] in
-                await self?.appState.toggleMeetingRecording()
+        HotkeyManager.shared.onPasteNotes = { [weak self] in
+            DispatchQueue.main.async { [weak self] in
+                self?.popover?.performClose(nil)
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    self?.openDashboard()
+                }
             }
         }
     }

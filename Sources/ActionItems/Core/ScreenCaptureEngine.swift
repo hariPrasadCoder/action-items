@@ -21,19 +21,18 @@ class ScreenCaptureEngine {
     /// Captures the frontmost app window and returns (image, appName).
     /// Falls back to full-screen capture if the window can't be isolated.
     static func captureFrontmostWindow() async throws -> (CGImage, String) {
-        // Check permission — only request once (CGRequestScreenCaptureAccess opens System Settings).
-        // Repeated calls would keep popping System Settings; instead just throw so the
-        // caller can show a persistent in-app message.
-        guard CGPreflightScreenCaptureAccess() else {
-            throw ScreenCaptureError.capturePermissionDenied
-        }
-
+        // Don't preflight — CGPreflightScreenCaptureAccess() returns false until the app
+        // restarts after permission is granted, causing false positives. Instead, just
+        // attempt the capture and let SCShareableContent throw if truly denied.
         let content: SCShareableContent
         do {
             content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         } catch {
-            // Map to a friendly error
-            if (error as NSError).domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain" {
+            // Map SCKit errors to our friendly error
+            let ns = error as NSError
+            if ns.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain"
+                || ns.domain == "com.apple.ScreenCaptureKit"
+                || ns.code == -3801 {
                 throw ScreenCaptureError.capturePermissionDenied
             }
             throw error
